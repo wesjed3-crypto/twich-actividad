@@ -112,8 +112,6 @@ def main() -> None:
 
     app = App(config_manager, discord_rpc, obs_listener)
 
-    check_for_updates()
-
     try:
         if opts["tray"]:
             app.after(100, app._minimize_to_tray)

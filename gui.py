@@ -1,6 +1,7 @@
+import os
 import threading
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
 import customtkinter as ctk
 
@@ -10,6 +11,10 @@ from obs_listener import OBSListener, StreamState
 from utils import LogManager
 
 APP_VERSION = "1.0.0"
+
+from diagnostic import DiagnosticDialog, DiagnosticRunner
+from image_assistant import ImageAssistantDialog
+from updater import Updater, UpdateDialog
 
 
 class StatusIndicator(ctk.CTkFrame):
@@ -44,30 +49,28 @@ class StatusIndicator(ctk.CTkFrame):
 
 
 class ToolTip:
-    """Tooltip con ventana compartida, retardo de 300ms y posicionamiento inteligente.
+    """Tooltip flotante sin hijos, con CTkToplevel, retardo de 300ms y posicionamiento junto al cursor.
 
-    - Una única instancia de CTkToplevel reutilizada para todos los tooltips.
-    - Aparece tras 300ms de permanencia sobre el widget.
-    - Desaparece inmediatamente al salir del widget.
-    - Nunca sale de los límites de la pantalla.
-    - No interfiere con el foco del teclado ni del ratón.
+    - No añade ningún widget hijo al control objetivo.
+    - Crea un CTkToplevel sin decoración (overrideredirect=True).
+    - El contenido (CTkLabel) va dentro del CTkToplevel, nunca dentro del widget objetivo.
+    - Se posiciona junto al cursor.
+    - Solo un tooltip visible a la vez.
+    - Al salir el ratón, destruye completamente el CTkToplevel.
+    - Cancela correctamente cualquier after() pendiente.
+    - Compatible con cualquier widget de CustomTkinter.
     """
 
     _tip_window: Optional[ctk.CTkToplevel] = None
     _tip_label: Optional[ctk.CTkLabel] = None
     _after_id: Optional[str] = None
-    _current_widget: Optional[ctk.CTkBaseClass] = None
+    _current_widget: Optional[Any] = None
 
-    def __init__(self, master: Any, text: str, **kwargs: Any) -> None:
-        self.label = ctk.CTkLabel(
-            master, text="?", width=20,
-            font=("Segoe UI", 10, "bold"),
-            text_color="#888888", cursor="hand2", **kwargs
-        )
-        self.label.pack(side="left", padx=(2, 0))
+    def __init__(self, master: Any, text: str) -> None:
+        self.master = master
         self.text = text
-        self.label.bind("<Enter>", self._on_enter)
-        self.label.bind("<Leave>", self._on_leave)
+        master.bind("<Enter>", self._on_enter, add="+")
+        master.bind("<Leave>", self._on_leave, add="+")
 
     # ---- Shared window lifecycle ----
 
@@ -104,9 +107,11 @@ class ToolTip:
         cls._current_widget = None
         if cls._tip_window is not None:
             try:
-                cls._tip_window.withdraw()
+                cls._tip_window.destroy()
             except Exception:
                 pass
+        cls._tip_window = None
+        cls._tip_label = None
 
     # ---- Eventos enter / leave ----
 
@@ -117,7 +122,7 @@ class ToolTip:
         # Cancelar cualquier temporizador anterior
         if cls._after_id is not None:
             try:
-                self.label.after_cancel(cls._after_id)
+                cls._current_widget.after_cancel(cls._after_id)
             except Exception:
                 pass
             cls._after_id = None
@@ -126,25 +131,30 @@ class ToolTip:
         if cls._tip_window is not None:
             cls._tip_window.withdraw()
 
-        cls._current_widget = self.label
-        cls._after_id = self.label.after(300, self._show)
+        cls._current_widget = self.master
+        cls._after_id = self.master.after(300, self._show)
 
     def _on_leave(self, event: Any = None) -> None:
         cls = self.__class__
 
         # Solo cancelar temporizador si este widget es el actual
-        if cls._current_widget is self.label:
+        if cls._current_widget is self.master:
             if cls._after_id is not None:
                 try:
-                    self.label.after_cancel(cls._after_id)
+                    self.master.after_cancel(cls._after_id)
                 except Exception:
                     pass
                 cls._after_id = None
             cls._current_widget = None
 
-        # Ocultar tooltip inmediatamente
+        # Destruir tooltip inmediatamente
         if cls._tip_window is not None:
-            cls._tip_window.withdraw()
+            try:
+                cls._tip_window.destroy()
+            except Exception:
+                pass
+        cls._tip_window = None
+        cls._tip_label = None
 
     # ---- Mostrar con posicionamiento inteligente ----
 
@@ -154,9 +164,9 @@ class ToolTip:
 
         # Verificar que el widget sigue siendo el activo y está visible
         try:
-            if not self.label.winfo_viewable():
+            if not self.master.winfo_viewable():
                 return
-            if cls._current_widget is not self.label:
+            if cls._current_widget is not self.master:
                 return
         except Exception:
             return
@@ -165,20 +175,20 @@ class ToolTip:
         cls._tip_label.configure(text=self.text)
         cls._tip_window.update_idletasks()
 
-        # Calcular posición
-        x = self.label.winfo_rootx() + 20
-        y = self.label.winfo_rooty() + 20
+        # Calcular posición junto al cursor
+        x = self.master.winfo_pointerx() + 15
+        y = self.master.winfo_pointery() + 15
 
         tw = cls._tip_window.winfo_reqwidth()
         th = cls._tip_window.winfo_reqheight()
-        sw = self.label.winfo_screenwidth()
-        sh = self.label.winfo_screenheight()
+        sw = self.master.winfo_screenwidth()
+        sh = self.master.winfo_screenheight()
 
         # Ajustar si se sale de la pantalla
         if x + tw > sw:
             x = sw - tw - 5
         if y + th > sh:
-            y = self.label.winfo_rooty() - th - 5
+            y = sh - th - 5
         if x < 0:
             x = 5
         if y < 0:
@@ -353,6 +363,8 @@ class App(ctk.CTk):
         self._last_update_time: Optional[str] = None
         self._presence_active: bool = False
 
+        self.updater = Updater(APP_VERSION, config_manager.data_dir)
+
         self._setup_window()
         self._build_top_bar()
         self._build_main_area()
@@ -368,6 +380,7 @@ class App(ctk.CTk):
         self.after(3000, self._auto_connect_all)
         if not self.config_manager.welcome_shown:
             self.after(500, self._show_guide_dialog)
+        self.after(5000, self._check_updates_startup)
 
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         self.bind("<FocusOut>", self._on_focus_lost, add="+")
@@ -418,7 +431,8 @@ class App(ctk.CTk):
         self._help_var.trace_add("write", lambda *a: self._on_help_selected())
         self._help_menu = ctk.CTkOptionMenu(
             bar, values=["Ayuda", "Guía inicial", "README", "GitHub",
-                         "Reportar error", "Licencia", "Changelog", "---", "Acerca de"],
+                         "Reportar error", "Licencia", "Changelog",
+                         "---", "Buscar actualizaciones", "Diagnóstico", "---", "Acerca de"],
             variable=self._help_var,
             font=("Segoe UI", 10), height=26,
             fg_color="#444", dropdown_font=("Segoe UI", 10),
@@ -815,6 +829,12 @@ class App(ctk.CTk):
             wraplength=300, justify="left",
         ).grid(row=len(fields) + 1, column=0, columnspan=2, sticky="w", padx=8, pady=(0, 8))
 
+        ctk.CTkButton(
+            parent, text="🖼 Asistente de imágenes",
+            command=self._on_image_assistant,
+            font=("Segoe UI", 11), fg_color="#444", hover_color="#555",
+        ).grid(row=len(fields) + 2, column=0, columnspan=2, sticky="ew", padx=8, pady=(4, 8))
+
     def _build_buttons_tab(self) -> None:
         parent = self._tab_buttons
         parent.grid_columnconfigure(1, weight=1)
@@ -900,6 +920,53 @@ class App(ctk.CTk):
             font=("Segoe UI", 11),
             command=self._schedule_auto_save,
         ).grid(row=row, column=0, columnspan=2, sticky="w", padx=8, pady=2)
+        row += 1
+
+        row += 1
+        ctk.CTkLabel(
+            parent, text="Actualizaciones", font=("Segoe UI", 12, "bold")
+        ).grid(row=row, column=0, columnspan=2, sticky="w", padx=8, pady=(8, 4))
+        row += 1
+
+        self._check_updates_var = ctk.BooleanVar(
+            value=self.config.get("check_updates_on_startup", True)
+        )
+        ctk.CTkCheckBox(
+            parent, text="Buscar actualizaciones al iniciar",
+            variable=self._check_updates_var,
+            font=("Segoe UI", 11),
+            command=self._schedule_auto_save,
+        ).grid(row=row, column=0, columnspan=2, sticky="w", padx=8, pady=2)
+        row += 1
+
+        self._auto_download_var = ctk.BooleanVar(
+            value=self.config.get("auto_download_updates", False)
+        )
+        ctk.CTkCheckBox(
+            parent, text="Descargar automáticamente",
+            variable=self._auto_download_var,
+            font=("Segoe UI", 11),
+            command=self._schedule_auto_save,
+        ).grid(row=row, column=0, columnspan=2, sticky="w", padx=8, pady=2)
+        row += 1
+
+        self._notify_beta_var = ctk.BooleanVar(
+            value=self.config.get("notify_beta_versions", False)
+        )
+        ctk.CTkCheckBox(
+            parent, text="Notificar versiones beta",
+            variable=self._notify_beta_var,
+            font=("Segoe UI", 11),
+            command=self._schedule_auto_save,
+        ).grid(row=row, column=0, columnspan=2, sticky="w", padx=8, pady=2)
+        row += 1
+
+        row += 1
+        ctk.CTkButton(
+            parent, text="🔍 Diagnóstico del sistema",
+            command=self._on_diagnostic,
+            font=("Segoe UI", 11), fg_color="#444", hover_color="#555",
+        ).grid(row=row, column=0, columnspan=2, sticky="ew", padx=8, pady=(4, 8))
         row += 1
 
         row += 1
@@ -1057,6 +1124,9 @@ class App(ctk.CTk):
         config["start_with_windows"] = self._start_with_windows_var.get()
         config["theme_dark"] = self._theme_dark
         config["auto_update_enabled"] = self._auto_update_enabled
+        config["check_updates_on_startup"] = self._check_updates_var.get()
+        config["auto_download_updates"] = self._auto_download_var.get()
+        config["notify_beta_versions"] = self._notify_beta_var.get()
         config["window_geometry"] = self.geometry()
         config["_selected_tab"] = self._tab_view.get()
         config["_log_filter"] = self._log_filter_var.get()
@@ -1838,6 +1908,146 @@ class App(ctk.CTk):
                     daemon=True,
                 ).start()
 
+    # --- Image Assistant ---
+
+    def _on_image_assistant(self) -> None:
+        config = self._get_config_from_ui()
+
+        def _on_save(new_cfg: Dict[str, Any]) -> None:
+            self.config.update(new_cfg)
+            self._load_config_to_ui()
+            self._schedule_auto_save()
+            self.log_manager.success("Imágenes actualizadas desde el asistente")
+
+        ImageAssistantDialog(self, config, _on_save)
+
+    # --- Diagnostic ---
+
+    def _on_diagnostic(self) -> None:
+        runner = DiagnosticRunner(
+            self.config, self.config_manager,
+            self.discord_rpc, self.obs_listener,
+        )
+        DiagnosticDialog(self, runner)
+
+    # --- Updater ---
+
+    def _check_updates_startup(self) -> None:
+        if not self.config.get("check_updates_on_startup", True):
+            return
+        self.updater.check(
+            include_beta=self.config.get("notify_beta_versions", False),
+            callback=self._on_update_checked,
+        )
+
+    def _on_check_updates_menu(self) -> None:
+        self.log_manager.info("Buscando actualizaciones...")
+        self.updater.check(
+            include_beta=self.config.get("notify_beta_versions", False),
+            callback=self._on_update_checked,
+        )
+
+    def _on_update_checked(
+        self,
+        available: bool,
+        version: Optional[str],
+        notes: Optional[str],
+        download_url: Optional[str],
+        release_url: Optional[str],
+    ) -> None:
+        if available and version:
+            if self.updater.is_skipped(version):
+                self.log_manager.info(f"Versión v{version} omitida por el usuario")
+                return
+            self.after(0, lambda: self._show_update_dialog(
+                version, notes or "", download_url, release_url or "",
+            ))
+        elif not available:
+            self.log_manager.info("Ya tienes la última versión disponible")
+
+    def _show_update_dialog(
+        self, version: str, notes: str, download_url: Optional[str], release_url: str,
+    ) -> None:
+        UpdateDialog(self, self.updater, version, notes, download_url, release_url)
+
+    # --- Help menu items ---
+
+    def _show_help_guide(self) -> None:
+        self._show_guide_dialog()
+
+    def _show_readme(self) -> None:
+        import webbrowser
+        webbrowser.open("https://github.com/wesjed3-crypto/twich-actividad#readme")
+
+    def _show_github(self) -> None:
+        import webbrowser
+        webbrowser.open("https://github.com/wesjed3-crypto/twich-actividad")
+
+    def _show_report(self) -> None:
+        import webbrowser
+        webbrowser.open("https://github.com/wesjed3-crypto/twich-actividad/issues/new")
+
+    def _show_license(self) -> None:
+        import webbrowser
+        webbrowser.open("https://github.com/wesjed3-crypto/twich-actividad/blob/main/LICENSE")
+
+    def _show_changelog(self) -> None:
+        import webbrowser
+        webbrowser.open("https://github.com/wesjed3-crypto/twich-actividad/blob/main/CHANGELOG.md")
+
+    def _show_about(self) -> None:
+        AboutDialog(self)
+
+    def _open_networks(self) -> None:
+        import webbrowser
+        webbrowser.open("https://guns.lol/wesjed")
+
+    def _show_help(self) -> None:
+        self._show_guide_dialog()
+
+    def _show_guide_dialog(self) -> None:
+        if hasattr(self, '_wizard') and self._wizard and self._wizard.winfo_exists():
+            self._wizard.lift()
+            self._wizard.focus()
+            return
+        self._wizard = WelcomeWizard(self, self.config_manager)
+
+    def _help_menu_command(self, action: str) -> None:
+        actions = {
+            "guide": self._show_guide_dialog,
+            "readme": self._show_readme,
+            "github": self._show_github,
+            "report": self._show_report,
+            "license": self._show_license,
+            "changelog": self._show_changelog,
+            "check_updates": self._on_check_updates_menu,
+            "diagnostic": self._on_diagnostic,
+            "about": self._show_about,
+        }
+        fn = actions.get(action)
+        if fn:
+            fn()
+
+    def _on_help_selected(self) -> None:
+        v = self._help_var.get()
+        self._help_var.set("Ayuda")
+        if v == "Ayuda" or v == "---":
+            return
+        mapping = {
+            "Guía inicial": "guide",
+            "README": "readme",
+            "GitHub": "github",
+            "Reportar error": "report",
+            "Licencia": "license",
+            "Changelog": "changelog",
+            "Buscar actualizaciones": "check_updates",
+            "Diagnóstico": "diagnostic",
+            "Acerca de": "about",
+        }
+        action = mapping.get(v)
+        if action:
+            self._help_menu_command(action)
+
 
 class AboutDialog(ctk.CTkToplevel):
     def __init__(self, parent: ctk.CTk) -> None:
@@ -2099,76 +2309,4 @@ class WelcomeWizard(ctk.CTkToplevel):
         self.parent.config_manager.save(cfg)
         self.destroy()
 
-    # --- Help menu items ---
 
-    def _show_help_guide(self) -> None:
-        self._show_guide_dialog()
-
-    def _show_readme(self) -> None:
-        import webbrowser
-        webbrowser.open("https://github.com/wesjed3-crypto/twich-actividad#readme")
-
-    def _show_github(self) -> None:
-        import webbrowser
-        webbrowser.open("https://github.com/wesjed3-crypto/twich-actividad")
-
-    def _show_report(self) -> None:
-        import webbrowser
-        webbrowser.open("https://github.com/wesjed3-crypto/twich-actividad/issues/new")
-
-    def _show_license(self) -> None:
-        import webbrowser
-        webbrowser.open("https://github.com/wesjed3-crypto/twich-actividad/blob/main/LICENSE")
-
-    def _show_changelog(self) -> None:
-        import webbrowser
-        webbrowser.open("https://github.com/wesjed3-crypto/twich-actividad/blob/main/CHANGELOG.md")
-
-    def _show_about(self) -> None:
-        AboutDialog(self)
-
-    def _open_networks(self) -> None:
-        import webbrowser
-        webbrowser.open("https://guns.lol/wesjed")
-
-    def _show_help(self) -> None:
-        self._show_guide_dialog()
-
-    def _show_guide_dialog(self) -> None:
-        if hasattr(self, '_wizard') and self._wizard and self._wizard.winfo_exists():
-            self._wizard.lift()
-            self._wizard.focus()
-            return
-        self._wizard = WelcomeWizard(self, self.config_manager)
-
-    def _help_menu_command(self, action: str) -> None:
-        actions = {
-            "guide": self._show_guide_dialog,
-            "readme": self._show_readme,
-            "github": self._show_github,
-            "report": self._show_report,
-            "license": self._show_license,
-            "changelog": self._show_changelog,
-            "about": self._show_about,
-        }
-        fn = actions.get(action)
-        if fn:
-            fn()
-
-    def _on_help_selected(self) -> None:
-        v = self._help_var.get()
-        self._help_var.set("Ayuda")
-        if v == "Ayuda" or v == "---":
-            return
-        mapping = {
-            "Guía inicial": "guide",
-            "README": "readme",
-            "GitHub": "github",
-            "Reportar error": "report",
-            "Licencia": "license",
-            "Changelog": "changelog",
-            "Acerca de": "about",
-        }
-        action = mapping.get(v)
-        if action:
-            self._help_menu_command(action)

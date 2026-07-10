@@ -89,6 +89,14 @@ class DiscordRPC:
             try:
                 at_str = config.get("activity_type", "playing")
                 at_value = self._ACTIVITY_TYPE_VALUE.get(at_str, 0)
+
+                if at_value not in self.VALID_ACTIVITY_TYPES:
+                    self.log.warning(
+                        f"Tipo de actividad '{at_str}' ({at_value}) no soportado por Discord RPC. "
+                        f"Usando 'Jugando' como fallback."
+                    )
+                    at_value = 0
+
                 if at_value != 0:
                     clean = {k: v for k, v in payload.items() if not k.startswith("_")}
                     full = Payload.set_activity(pid=os.getpid(), **clean)
@@ -173,6 +181,8 @@ class DiscordRPC:
     def _hash_payload(payload: Dict[str, Any]) -> str:
         raw = json.dumps(payload, sort_keys=True, ensure_ascii=False)
         return hashlib.md5(raw.encode()).hexdigest()
+
+    VALID_ACTIVITY_TYPES: set[int] = {0, 2, 3, 5}
 
     _ACTIVITY_TYPE_VALUE: Dict[str, int] = {
         "playing": 0,

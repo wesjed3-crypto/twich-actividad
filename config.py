@@ -185,6 +185,9 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "start_minimized": False,
     "start_with_windows": False,
     "window_geometry": "1080x780",
+    "check_updates_on_startup": True,
+    "auto_download_updates": False,
+    "notify_beta_versions": False,
 }
 
 _DEFAULT_COMMENTS: Dict[str, str] = {
