@@ -1,0 +1,31 @@
+# Environment
+.env
+
+# Python cache
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Build output
+build/
+dist/
+**/build/
+**/dist/
+
+# User data (config, profiles, logs, cache)
+# Config is stored in %APPDATA%/Obsidian Stream Connect/
+# but also ignore local copies if any
+config.json
+profiles/
+logs/
+cache/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+Thumbs.db
+.DS_Store
