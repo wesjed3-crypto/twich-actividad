@@ -25,8 +25,8 @@
 ## Instalación
 
 ```bash
-git clone https://github.com/wesjed3-crypto/obsidian-stream-connect.git
-cd obsidian-stream-connect
+git clone https://github.com/wesjed3-crypto/twich-actividad.git
+cd twich-actividad
 pip install -r requirements.txt
 ```
 

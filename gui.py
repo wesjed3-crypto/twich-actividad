@@ -1908,7 +1908,7 @@ class AboutDialog(ctk.CTkToplevel):
 
         def _open_github():
             import webbrowser
-            webbrowser.open("https://github.com/wesjed3-crypto/obsidian-stream-connect")
+            webbrowser.open("https://github.com/wesjed3-crypto/twich-actividad")
 
         btn_row = ctk.CTkFrame(frame, fg_color="transparent")
         btn_row.pack(fill="x")
@@ -2106,23 +2106,23 @@ class WelcomeWizard(ctk.CTkToplevel):
 
     def _show_readme(self) -> None:
         import webbrowser
-        webbrowser.open("https://github.com/wesjed3-crypto/obsidian-stream-connect#readme")
+        webbrowser.open("https://github.com/wesjed3-crypto/twich-actividad#readme")
 
     def _show_github(self) -> None:
         import webbrowser
-        webbrowser.open("https://github.com/wesjed3-crypto/obsidian-stream-connect")
+        webbrowser.open("https://github.com/wesjed3-crypto/twich-actividad")
 
     def _show_report(self) -> None:
         import webbrowser
-        webbrowser.open("https://github.com/wesjed3-crypto/obsidian-stream-connect/issues/new")
+        webbrowser.open("https://github.com/wesjed3-crypto/twich-actividad/issues/new")
 
     def _show_license(self) -> None:
         import webbrowser
-        webbrowser.open("https://github.com/wesjed3-crypto/obsidian-stream-connect/blob/main/LICENSE")
+        webbrowser.open("https://github.com/wesjed3-crypto/twich-actividad/blob/main/LICENSE")
 
     def _show_changelog(self) -> None:
         import webbrowser
-        webbrowser.open("https://github.com/wesjed3-crypto/obsidian-stream-connect/blob/main/CHANGELOG.md")
+        webbrowser.open("https://github.com/wesjed3-crypto/twich-actividad/blob/main/CHANGELOG.md")
 
     def _show_about(self) -> None:
         AboutDialog(self)
